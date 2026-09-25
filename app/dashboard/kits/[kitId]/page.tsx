@@ -23,6 +23,11 @@ import {
   endPracticeSession,
   listPracticeSessions,
   getPracticeSessionDetail,
+  getPracticeQueue,
+  saveMockExam,
+  listMockExams,
+  getMockExamDetail,
+  generateMockExamAiReport,
 } from "@/lib/api/kits";
 import type {
   AppendixAKit,
@@ -35,6 +40,10 @@ import type {
   PracticeSessionDetail,
   NewQuestionDraft,
   NewFlashcardDraft,
+  MockExamSummary,
+  MockExamDetail,
+  AiCoachReport,
+  MockExamQuestionRecord,
 } from "@/lib/api/kits";
 import {
   BrainCircuit, Loader2, AlertCircle, ChevronLeft, ChevronRight,
@@ -43,6 +52,8 @@ import {
   RefreshCw, Sparkles, Save, Undo2, Briefcase,
   ArrowLeft, PlayCircle, CheckCircle2, Bookmark, Pause, Play,
   Flame, RotateCcw, HelpCircle, Eye, EyeOff, Sparkle, SlidersHorizontal,
+  FileText, Trophy, TrendingUp, SkipForward, Download, Bot, Star,
+  ClipboardList, ZapIcon, AlertOctagon, ThumbsUp, Lightbulb,
 } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
 
@@ -682,11 +693,15 @@ function MockQuestionPracticeView({
   questions,
   title,
   subtitle,
+  kitId,
+  token,
   onClose,
 }: {
   questions: GeneratedQuestion[];
   title: string;
   subtitle?: string;
+  kitId: string;
+  token: string;
   onClose: () => void;
 }) {
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -697,6 +712,42 @@ function MockQuestionPracticeView({
   const [secondsElapsed, setSecondsElapsed] = useState(0);
   const [isTimerRunning, setIsTimerRunning] = useState(true);
   const [showFinishedSummary, setShowFinishedSummary] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savedExamId, setSavedExamId] = useState<string | null>(null);
+  const [generatingReport, setGeneratingReport] = useState(false);
+  const [aiReport, setAiReport] = useState<AiCoachReport | null>(null);
+  const [showReport, setShowReport] = useState(false);
+  const examStartedAt = useRef(new Date().toISOString());
+
+  // Keyboard: ArrowLeft/Right to navigate, Space to toggle answer
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (showFinishedSummary || showReport) return;
+      if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
+      if (e.key === "ArrowRight") {
+        setCurrentIndex((i) => Math.min(i + 1, questions.length - 1));
+        setShowAnswer(false);
+      }
+      if (e.key === "ArrowLeft") {
+        setCurrentIndex((i) => Math.max(i - 1, 0));
+        setShowAnswer(false);
+      }
+      if (e.key === " ") { e.preventDefault(); setShowAnswer((v) => !v); }
+      if (e.key === "f" || e.key === "F") {
+        const q = questions[currentIndex];
+        if (q) setFlagged((prev) => ({ ...prev, [q.id]: !prev[q.id] }));
+      }
+      if (["1","2","3","4","5"].includes(e.key)) {
+        const q = questions[currentIndex];
+        if (q) {
+          const map: Record<string, number> = { "1": 2, "2": 4, "3": 6, "4": 8, "5": 10 };
+          setRatings((prev) => ({ ...prev, [q.id]: map[e.key]! }));
+        }
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [questions, currentIndex, showFinishedSummary, showReport]);
 
   // Stopwatch timer
   useEffect(() => {
@@ -716,17 +767,238 @@ function MockQuestionPracticeView({
 
   const theme = CATEGORY_THEMES[currentQ.category] ?? { bg: "bg-white/5", text: "text-white/60", border: "border-white/10", glow: "" };
 
-  const toggleFlag = (qid: string) => {
-    setFlagged((prev) => ({ ...prev, [qid]: !prev[qid] }));
+  const toggleFlag = (qid: string) => setFlagged((prev) => ({ ...prev, [qid]: !prev[qid] }));
+  const setRating = (qid: string, val: number) => setRatings((prev) => ({ ...prev, [qid]: val }));
+  const setNote = (qid: string, note: string) => setUserNotes((prev) => ({ ...prev, [qid]: note }));
+
+  const handleFinish = () => {
+    setIsTimerRunning(false);
+    setShowFinishedSummary(true);
   };
 
-  const setRating = (qid: string, val: number) => {
-    setRatings((prev) => ({ ...prev, [qid]: val }));
+  const handleSaveExam = async () => {
+    setSaving(true);
+    try {
+      const finishedAt = new Date().toISOString();
+      const examQuestions: MockExamQuestionRecord[] = questions.map((q, i) => ({
+        questionId: q.id,
+        questionText: q.prompt,
+        answerOutline: q.answer_outline,
+        category: q.category,
+        difficulty: q.difficulty,
+        userNotes: userNotes[q.id] ?? undefined,
+        confidence: ratings[q.id] ?? null,
+        flagged: flagged[q.id] ?? false,
+        position: i,
+      }));
+      const res = await saveMockExam(kitId, {
+        title,
+        startedAt: examStartedAt.current,
+        finishedAt,
+        durationSec: secondsElapsed,
+        questions: examQuestions,
+      }, token);
+      setSavedExamId(res.examId);
+    } catch (e: any) {
+      alert("Failed to save exam: " + e.message);
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const setNote = (qid: string, note: string) => {
-    setUserNotes((prev) => ({ ...prev, [qid]: note }));
+  const handleGenerateReport = async () => {
+    if (!savedExamId) return;
+    setGeneratingReport(true);
+    try {
+      const report = await generateMockExamAiReport(kitId, savedExamId, token);
+      setAiReport(report);
+      setShowReport(true);
+    } catch (e: any) {
+      alert("Failed to generate AI report: " + e.message);
+    } finally {
+      setGeneratingReport(false);
+    }
   };
+
+  const handleDownloadPDF = () => {
+    const ratedQs = questions.filter((q) => ratings[q.id] !== undefined);
+    const avgConf = ratedQs.length > 0
+      ? (ratedQs.reduce((s, q) => s + (ratings[q.id] ?? 0), 0) / ratedQs.length).toFixed(1)
+      : "N/A";
+
+    const reportHtml = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>${title} — Mock Exam Report</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; background: #fff; color: #1a1a2e; }
+  h1 { font-size: 24px; font-weight: 800; color: #4f46e5; }
+  h2 { font-size: 16px; font-weight: 700; color: #4f46e5; border-bottom: 2px solid #e0e7ff; padding-bottom: 6px; margin-top: 32px; }
+  .meta { color: #6b7280; font-size: 13px; margin-bottom: 24px; }
+  .stats { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin: 20px 0; }
+  .stat { background: #f5f3ff; border-radius: 12px; padding: 12px; text-align: center; }
+  .stat-value { font-size: 22px; font-weight: 800; color: #4f46e5; }
+  .stat-label { font-size: 11px; color: #6b7280; text-transform: uppercase; }
+  .question { border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; margin: 12px 0; page-break-inside: avoid; }
+  .question-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .q-number { font-weight: 800; color: #4f46e5; }
+  .q-category { font-size: 11px; background: #ede9fe; color: #5b21b6; padding: 2px 8px; border-radius: 20px; text-transform: uppercase; font-weight: 700; }
+  .q-prompt { font-size: 14px; font-weight: 600; color: #111827; margin: 8px 0; }
+  .q-answer { font-size: 12px; color: #374151; background: #f9fafb; border-left: 3px solid #818cf8; padding: 10px 12px; border-radius: 0 8px 8px 0; margin: 8px 0; }
+  .q-notes { font-size: 12px; color: #6b7280; font-style: italic; margin: 6px 0; }
+  .q-meta { display: flex; gap: 12px; margin-top: 8px; font-size: 11px; }
+  .confidence { font-weight: 700; }
+  .conf-high { color: #059669; }
+  .conf-mid { color: #d97706; }
+  .conf-low { color: #dc2626; }
+  .flagged-badge { background: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 20px; font-size: 10px; font-weight: 700; }
+  ${aiReport ? `.ai-section { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 12px; padding: 20px; margin: 20px 0; }
+  .ai-grade { font-size: 48px; font-weight: 900; color: #059669; }
+  .ai-score { font-size: 18px; color: #065f46; }
+  .ai-item { padding: 6px 0; font-size: 13px; }
+  .strength { color: #065f46; } .weakness { color: #991b1b; }` : ""}
+  @media print { body { margin: 20px; } }
+</style></head><body>
+<h1>${title}</h1>
+<p class="meta">Generated: ${new Date().toLocaleDateString()} at ${new Date().toLocaleTimeString()} | Duration: ${formatTime(secondsElapsed)}</p>
+<div class="stats">
+  <div class="stat"><div class="stat-value">${questions.length}</div><div class="stat-label">Questions</div></div>
+  <div class="stat"><div class="stat-value">${Object.keys(ratings).length}</div><div class="stat-label">Rated</div></div>
+  <div class="stat"><div class="stat-value">${Object.values(flagged).filter(Boolean).length}</div><div class="stat-label">Flagged</div></div>
+  <div class="stat"><div class="stat-value">${avgConf}</div><div class="stat-label">Avg Confidence</div></div>
+</div>
+${aiReport ? `<div class="ai-section">
+  <h2 style="margin-top:0;border:none">AI Coaching Report</h2>
+  <div style="display:flex;align-items:baseline;gap:12px"><span class="ai-grade">${aiReport.grade}</span><span class="ai-score">${aiReport.overallScore}/100</span></div>
+  <p>${aiReport.summary}</p>
+  <p><strong>Strengths:</strong></p><ul>${aiReport.strengths.map((s) => `<li class="strength">${s}</li>`).join("")}</ul>
+  <p><strong>Areas to Improve:</strong></p><ul>${aiReport.weaknesses.map((w) => `<li class="weakness">${w}</li>`).join("")}</ul>
+  <p><strong>Next Steps:</strong></p><ol>${aiReport.nextSteps.map((n) => `<li>${n}</li>`).join("")}</ol>
+  <p><em>${aiReport.motivationalNote}</em></p>
+</div>` : ""}
+<h2>Question-by-Question Review</h2>
+${questions.map((q, i) => `
+<div class="question">
+  <div class="question-header">
+    <span class="q-number">Q${i + 1}</span>
+    <div style="display:flex;gap:8px;align-items:center">
+      <span class="q-category">${q.category}</span>
+      ${flagged[q.id] ? '<span class="flagged-badge">Flagged</span>' : ""}
+    </div>
+  </div>
+  <div class="q-prompt">${q.prompt}</div>
+  <div class="q-answer"><strong>Key Points:</strong><br>${q.answer_outline}</div>
+  ${userNotes[q.id] ? `<div class="q-notes"><strong>Your Notes:</strong> ${userNotes[q.id]}</div>` : ""}
+  <div class="q-meta">
+    <span class="confidence ${ratings[q.id] >= 7 ? "conf-high" : ratings[q.id] >= 4 ? "conf-mid" : "conf-low"}">
+      ${ratings[q.id] !== undefined ? `Confidence: ${ratings[q.id]}/10` : "Not rated"}
+    </span>
+    <span>Difficulty: ${"★".repeat(q.difficulty)}${"☆".repeat(3 - q.difficulty)}</span>
+  </div>
+</div>`).join("")}
+</body></html>`;
+
+    const blob = new Blob([reportHtml], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${title.replace(/[^a-z0-9]/gi, "_").toLowerCase()}_mock_exam_report.html`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // AI Coach Report Full-Screen View
+  if (showReport && aiReport) {
+    return (
+      <div className="fixed inset-0 z-50 bg-[#0a0c14]/95 backdrop-blur-xl flex flex-col overflow-hidden animate-in fade-in duration-300">
+        <header className="flex items-center justify-between px-6 py-3 bg-[#0d0f18] border-b border-white/[0.08] shrink-0">
+          <div className="flex items-center gap-3">
+            <button onClick={() => setShowReport(false)} className="p-2 text-white/40 hover:text-white bg-white/[0.03] hover:bg-white/[0.08] rounded-xl transition-all">
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+            <div>
+              <h3 className="text-white font-bold text-base flex items-center gap-2">
+                <Bot className="w-5 h-5 text-violet-400" />AI Coaching Report
+              </h3>
+              <p className="text-white/40 text-xs">{title}</p>
+            </div>
+          </div>
+          <button onClick={handleDownloadPDF}
+            className="flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-violet-600/20 transition-all">
+            <Download className="w-4 h-4" />Download Report
+          </button>
+        </header>
+
+        <div className="flex-1 overflow-y-auto p-6 max-w-3xl mx-auto w-full space-y-6">
+          {/* Grade card */}
+          <div className="bg-gradient-to-br from-violet-900/30 to-indigo-900/30 border border-violet-500/30 rounded-3xl p-6 text-center">
+            <div className="text-7xl font-black text-white mb-2">{aiReport.grade}</div>
+            <div className="text-2xl font-bold text-violet-300">{aiReport.overallScore}/100</div>
+            <p className="text-white/60 text-sm mt-3 max-w-md mx-auto leading-relaxed">{aiReport.summary}</p>
+          </div>
+
+          {/* Strengths & Weaknesses */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="bg-emerald-900/20 border border-emerald-500/30 rounded-2xl p-4 space-y-2">
+              <h4 className="text-emerald-300 font-bold text-sm flex items-center gap-2"><ThumbsUp className="w-4 h-4" />Strengths</h4>
+              {aiReport.strengths.map((s, i) => (
+                <div key={i} className="flex items-start gap-2 text-xs text-white/80">
+                  <span className="text-emerald-400 mt-0.5">✓</span>{s}
+                </div>
+              ))}
+            </div>
+            <div className="bg-rose-900/20 border border-rose-500/30 rounded-2xl p-4 space-y-2">
+              <h4 className="text-rose-300 font-bold text-sm flex items-center gap-2"><AlertOctagon className="w-4 h-4" />Areas to Improve</h4>
+              {aiReport.weaknesses.map((w, i) => (
+                <div key={i} className="flex items-start gap-2 text-xs text-white/80">
+                  <span className="text-rose-400 mt-0.5">→</span>{w}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Focus Areas */}
+          {aiReport.focusAreas.length > 0 && (
+            <div className="space-y-3">
+              <h4 className="text-white font-bold text-sm flex items-center gap-2"><Lightbulb className="w-4 h-4 text-amber-400" />Focus Areas & Study Plan</h4>
+              {aiReport.focusAreas.map((area, i) => (
+                <div key={i} className={`p-4 rounded-2xl border space-y-2 ${area.priority === "high" ? "bg-rose-900/10 border-rose-500/25" : area.priority === "medium" ? "bg-amber-900/10 border-amber-500/25" : "bg-white/[0.02] border-white/[0.08]"}`}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-white font-bold text-sm">{area.area}</span>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${area.priority === "high" ? "bg-rose-500/20 text-rose-300" : area.priority === "medium" ? "bg-amber-500/20 text-amber-300" : "bg-white/10 text-white/60"}`}>{area.priority}</span>
+                  </div>
+                  <p className="text-white/70 text-xs leading-relaxed">{area.advice}</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {area.studyTopics.map((topic, j) => (
+                      <span key={j} className="px-2 py-0.5 bg-violet-500/15 text-violet-300 text-[10px] rounded-lg border border-violet-500/20">{topic}</span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Next Steps */}
+          <div className="bg-[#0f111a] border border-white/[0.08] rounded-2xl p-5 space-y-3">
+            <h4 className="text-white font-bold text-sm flex items-center gap-2"><Target className="w-4 h-4 text-teal-400" />Your Next Steps</h4>
+            <ol className="space-y-2">
+              {aiReport.nextSteps.map((step, i) => (
+                <li key={i} className="flex items-start gap-3 text-sm text-white/80">
+                  <span className="w-5 h-5 rounded-full bg-violet-600 text-white text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">{i + 1}</span>
+                  {step}
+                </li>
+              ))}
+            </ol>
+          </div>
+
+          {/* Motivational Note */}
+          <div className="text-center py-4 px-6 bg-gradient-to-r from-violet-900/20 to-indigo-900/20 border border-violet-500/20 rounded-2xl">
+            <p className="text-violet-200 text-sm italic">"{aiReport.motivationalNote}"</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 bg-[#0a0c14]/95 backdrop-blur-xl flex flex-col overflow-hidden animate-in fade-in duration-300">
@@ -738,8 +1010,7 @@ function MockQuestionPracticeView({
           </button>
           <div>
             <h3 className="text-white font-bold text-base flex items-center gap-2">
-              <BrainCircuit className="w-5 h-5 text-violet-400" />
-              {title}
+              <BrainCircuit className="w-5 h-5 text-violet-400" />{title}
             </h3>
             {subtitle && <p className="text-white/40 text-xs">{subtitle}</p>}
           </div>
@@ -747,6 +1018,7 @@ function MockQuestionPracticeView({
 
         {/* Stopwatch & Stats */}
         <div className="flex items-center gap-4">
+          <span className="hidden sm:block text-white/20 text-[10px]">← → navigate · Space=answer · F=flag · 1-5=rate</span>
           <div className="flex items-center gap-2 px-3.5 py-1.5 bg-violet-500/10 border border-violet-500/20 rounded-xl font-mono text-sm text-violet-300 shadow-sm">
             <Clock className="w-4 h-4 text-violet-400" />
             <span>{formatTime(secondsElapsed)}</span>
@@ -755,7 +1027,7 @@ function MockQuestionPracticeView({
             </button>
           </div>
 
-          <button onClick={() => setShowFinishedSummary(true)}
+          <button onClick={handleFinish}
             className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-emerald-600/20 transition-all">
             <CheckCircle2 className="w-4 h-4" />Finish Exam
           </button>
@@ -767,7 +1039,7 @@ function MockQuestionPracticeView({
         {/* Question Area */}
         <div className="flex-1 flex flex-col p-6 overflow-y-auto space-y-5">
           {/* Question Meta Header */}
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-2">
             <div className="flex items-center gap-2.5">
               <span className="px-3 py-1 bg-violet-600 text-white font-extrabold text-xs rounded-lg shadow-md">
                 Q{currentIndex + 1} of {questions.length}
@@ -783,7 +1055,7 @@ function MockQuestionPracticeView({
                 flagged[currentQ.id] ? "bg-amber-500/20 text-amber-300 border-amber-500/40" : "bg-white/[0.03] text-white/40 border-white/10 hover:text-white"
               }`}>
               <Bookmark className="w-4 h-4" />
-              {flagged[currentQ.id] ? "Flagged for Review" : "Flag Question"}
+              {flagged[currentQ.id] ? "Flagged" : "Flag (F)"}
             </button>
           </div>
 
@@ -792,12 +1064,12 @@ function MockQuestionPracticeView({
             <h2 className="text-xl font-semibold text-white leading-relaxed">{currentQ.prompt}</h2>
           </div>
 
-          {/* Answer Outline Toggle & Self-Evaluation */}
+          {/* Answer Outline Toggle */}
           <div className="space-y-4">
             <button onClick={() => setShowAnswer((v) => !v)}
               className="flex items-center gap-2 px-4 py-2 bg-violet-500/10 hover:bg-violet-500/20 border border-violet-500/20 rounded-xl text-violet-300 font-semibold text-xs transition-all">
               {showAnswer ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              {showAnswer ? "Hide Key Answer Points" : "Reveal Answer Outline & Concepts"}
+              {showAnswer ? "Hide Key Answer Points" : "Reveal Answer Outline (Space)"}
             </button>
 
             {showAnswer && (
@@ -810,7 +1082,7 @@ function MockQuestionPracticeView({
             )}
           </div>
 
-          {/* Response Scratchpad / Personal Notes */}
+          {/* Response Scratchpad */}
           <div className="space-y-1.5">
             <label className="text-white/40 text-xs font-bold uppercase tracking-wider flex items-center gap-1.5">
               <Pencil className="w-3.5 h-3.5 text-violet-400" />Your Thoughts / Response Draft (Optional)
@@ -819,14 +1091,14 @@ function MockQuestionPracticeView({
               rows={3}
               value={userNotes[currentQ.id] || ""}
               onChange={(e) => setNote(currentQ.id, e.target.value)}
-              placeholder="Type your bullet points, code snippets, or key arguments here to test your timing..."
+              placeholder="Type your bullet points, code snippets, or key arguments here..."
               className="w-full bg-[#0d0f18] border border-white/10 rounded-2xl px-4 py-3 text-white text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40 resize-none"
             />
           </div>
 
-          {/* Self-Rating Selection */}
+          {/* Self-Rating */}
           <div className="bg-[#0d0f18] border border-white/[0.08] rounded-2xl p-5 space-y-3">
-            <p className="text-white/60 text-xs font-bold uppercase tracking-wider">How confident are you with this question?</p>
+            <p className="text-white/60 text-xs font-bold uppercase tracking-wider">How confident are you? (Keys 1-5)</p>
             <div className="grid grid-cols-5 gap-2">
               {CONFIDENCE_RATING_OPTIONS.map((opt) => (
                 <button
@@ -846,11 +1118,11 @@ function MockQuestionPracticeView({
           </div>
         </div>
 
-        {/* Question Navigation Palette Drawer */}
-        <aside className="w-72 bg-[#0d0f18] border-l border-white/[0.08] p-5 flex flex-col shrink-0 overflow-y-auto space-y-5">
+        {/* Question Navigation Palette */}
+        <aside className="w-64 lg:w-72 bg-[#0d0f18] border-l border-white/[0.08] p-5 flex flex-col shrink-0 overflow-y-auto space-y-5 hidden sm:flex">
           <div>
             <h4 className="text-white font-bold text-sm mb-1">Question Palette</h4>
-            <p className="text-white/40 text-xs">Jump to any question in this test set.</p>
+            <p className="text-white/40 text-xs">Jump to any question.</p>
           </div>
 
           <div className="grid grid-cols-4 gap-2">
@@ -878,9 +1150,9 @@ function MockQuestionPracticeView({
           </div>
 
           <div className="space-y-2 border-t border-white/[0.08] pt-4 text-[11px] text-white/50">
-            <div className="flex items-center gap-2"><span className="w-3 h-3 rounded bg-violet-600" /> Current Question</div>
+            <div className="flex items-center gap-2"><span className="w-3 h-3 rounded bg-violet-600" /> Current</div>
             <div className="flex items-center gap-2"><span className="w-3 h-3 rounded bg-emerald-500/20 border border-emerald-500/40" /> Self-Evaluated</div>
-            <div className="flex items-center gap-2"><span className="w-3 h-3 rounded bg-amber-500/20 border border-amber-500/40" /> Flagged for Review</div>
+            <div className="flex items-center gap-2"><span className="w-3 h-3 rounded bg-amber-500/20 border border-amber-500/40" /> Flagged</div>
             <div className="flex items-center gap-2"><span className="w-3 h-3 rounded bg-white/[0.04] border border-white/10" /> Unanswered</div>
           </div>
         </aside>
@@ -889,12 +1161,7 @@ function MockQuestionPracticeView({
       {/* Footer Navigation Bar */}
       <footer className="px-6 py-4 bg-[#0d0f18] border-t border-white/[0.08] flex items-center justify-between shrink-0">
         <button
-          onClick={() => {
-            if (currentIndex > 0) {
-              setCurrentIndex((i) => i - 1);
-              setShowAnswer(false);
-            }
-          }}
+          onClick={() => { if (currentIndex > 0) { setCurrentIndex((i) => i - 1); setShowAnswer(false); } }}
           disabled={currentIndex === 0}
           className="flex items-center gap-2 px-4 py-2 bg-white/[0.04] hover:bg-white/[0.08] text-white text-xs font-bold rounded-xl transition-all disabled:opacity-30 border border-white/10"
         >
@@ -902,7 +1169,7 @@ function MockQuestionPracticeView({
         </button>
 
         <div className="text-white/40 text-xs font-mono">
-          Evaluated {Object.keys(ratings).length} / {questions.length} questions
+          Rated {Object.keys(ratings).length} / {questions.length}
         </div>
 
         <button
@@ -911,7 +1178,7 @@ function MockQuestionPracticeView({
               setCurrentIndex((i) => i + 1);
               setShowAnswer(false);
             } else {
-              setShowFinishedSummary(true);
+              handleFinish();
             }
           }}
           className="flex items-center gap-2 px-5 py-2 bg-violet-600 hover:bg-violet-500 text-white text-xs font-bold rounded-xl transition-all shadow-lg shadow-violet-600/30"
@@ -923,18 +1190,19 @@ function MockQuestionPracticeView({
 
       {/* Finished Summary Modal */}
       {showFinishedSummary && (
-        <div className="fixed inset-0 z-60 bg-black/80 backdrop-blur-md flex items-center justify-center p-6 animate-in fade-in duration-200">
-          <div className="bg-[#0f111d] border border-white/15 rounded-3xl p-6 max-w-md w-full space-y-5 text-center shadow-2xl">
+        <div className="fixed inset-0 z-60 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-200">
+          <div className="bg-[#0f111d] border border-white/15 rounded-3xl p-6 max-w-lg w-full space-y-5 text-center shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500/20 to-teal-500/20 border border-emerald-500/30 flex items-center justify-center mx-auto">
               <CheckCircle2 className="w-8 h-8 text-emerald-400" />
             </div>
             <div>
               <h3 className="text-xl font-bold text-white">Practice Exam Complete!</h3>
-              <p className="text-white/40 text-xs mt-1">Great job stepping through these interview prompts.</p>
+              <p className="text-white/40 text-xs mt-1">Great job! Review your performance below.</p>
             </div>
-            <div className="grid grid-cols-3 gap-2 bg-white/[0.02] border border-white/[0.06] p-3 rounded-2xl text-center">
+
+            <div className="grid grid-cols-4 gap-2 bg-white/[0.02] border border-white/[0.06] p-3 rounded-2xl text-center">
               <div>
-                <span className="text-white/40 text-[10px] block uppercase font-mono">Time Spent</span>
+                <span className="text-white/40 text-[10px] block uppercase font-mono">Time</span>
                 <span className="text-white font-bold text-sm">{formatTime(secondsElapsed)}</span>
               </div>
               <div>
@@ -942,17 +1210,56 @@ function MockQuestionPracticeView({
                 <span className="text-white font-bold text-sm">{questions.length}</span>
               </div>
               <div>
-                <span className="text-white/40 text-[10px] block uppercase font-mono">Evaluated</span>
+                <span className="text-white/40 text-[10px] block uppercase font-mono">Rated</span>
                 <span className="text-white font-bold text-sm">{Object.keys(ratings).length}</span>
               </div>
+              <div>
+                <span className="text-white/40 text-[10px] block uppercase font-mono">Flagged</span>
+                <span className="text-white font-bold text-sm">{Object.values(flagged).filter(Boolean).length}</span>
+              </div>
             </div>
-            <div className="flex gap-2 pt-2">
-              <button onClick={() => setShowFinishedSummary(false)} className="flex-1 py-2.5 bg-white/[0.05] hover:bg-white/10 text-white text-xs font-semibold rounded-xl border border-white/10">
-                Review Answers
+
+            <div className="space-y-2.5 pt-1">
+              {!savedExamId ? (
+                <button onClick={handleSaveExam} disabled={saving}
+                  className="w-full flex items-center justify-center gap-2 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm rounded-xl shadow-lg shadow-emerald-600/20 disabled:opacity-50 transition-all">
+                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  {saving ? "Saving..." : "Save Exam to History"}
+                </button>
+              ) : (
+                <div className="flex items-center justify-center gap-2 py-2.5 bg-emerald-600/20 border border-emerald-500/30 rounded-xl text-emerald-300 text-sm font-semibold">
+                  <CheckCircle2 className="w-4 h-4" />Exam Saved Successfully
+                </div>
+              )}
+
+              {savedExamId && (
+                <button onClick={handleGenerateReport} disabled={generatingReport || Boolean(aiReport)}
+                  className="w-full flex items-center justify-center gap-2 py-3 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold text-sm rounded-xl shadow-lg disabled:opacity-60 transition-all">
+                  {generatingReport ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bot className="w-4 h-4" />}
+                  {aiReport ? "Report Ready — View Below" : generatingReport ? "Generating AI Coaching Report..." : "Get AI Coaching Report"}
+                </button>
+              )}
+
+              {aiReport && (
+                <button onClick={() => setShowReport(true)}
+                  className="w-full flex items-center justify-center gap-2 py-3 bg-violet-500/10 hover:bg-violet-500/20 border border-violet-500/30 text-violet-300 font-bold text-sm rounded-xl transition-all">
+                  <TrendingUp className="w-4 h-4" />View Full AI Coaching Report
+                </button>
+              )}
+
+              <button onClick={handleDownloadPDF}
+                className="w-full flex items-center justify-center gap-2 py-2.5 bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 text-white/70 text-sm font-semibold rounded-xl transition-colors">
+                <Download className="w-4 h-4" />Download Report (HTML)
               </button>
-              <button onClick={onClose} className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-emerald-600/20">
-                Done & Return
-              </button>
+
+              <div className="flex gap-2">
+                <button onClick={() => setShowFinishedSummary(false)} className="flex-1 py-2.5 bg-white/[0.05] hover:bg-white/10 text-white text-xs font-semibold rounded-xl border border-white/10">
+                  Review Answers
+                </button>
+                <button onClick={onClose} className="flex-1 py-2.5 bg-white/[0.03] hover:bg-white/[0.07] text-white/50 text-xs font-bold rounded-xl border border-white/[0.08]">
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -960,6 +1267,7 @@ function MockQuestionPracticeView({
     </div>
   );
 }
+
 
 // ─── Overview / Builder Tab ───────────────────────────────────────────────────
 
@@ -1481,6 +1789,8 @@ function FlashcardPracticeMode({
   const [sessionEnding, setSessionEnding] = useState(false);
   const [detailSession, setDetailSession] = useState<PracticeSessionDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const handleAttemptRef = useRef<(confidence: number | null, skipped: boolean) => Promise<void>>(async () => {});
 
   const loadSessions = useCallback(async () => {
     setSessionsLoading(true);
@@ -1494,6 +1804,21 @@ function FlashcardPracticeMode({
     const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
+  }, [screen]);
+
+  useEffect(() => {
+    if (screen !== "session") return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
+      if (e.key === " " || e.key === "Enter") { e.preventDefault(); setFlipped((v) => !v); }
+      if (e.key === "s" || e.key === "S") { e.preventDefault(); handleAttemptRef.current(null, true); }
+      if (["1","2","3","4","5"].includes(e.key)) {
+        const map: Record<string, number> = { "1": 1, "2": 3, "3": 5, "4": 8, "5": 10 };
+        handleAttemptRef.current(map[e.key]!, false);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
   }, [screen]);
 
   if (kit.flashcards.length === 0) {
@@ -1514,11 +1839,30 @@ function FlashcardPracticeMode({
   const currentCardId = queue[cardIndex];
   const currentCard = kit.flashcards.find((f) => f.id === currentCardId);
 
+  const handleAttempt = async (confidence: number | null, skipped: boolean) => {
+    if (!sessionId || !currentCardId) return;
+    setAttemptedCount((n) => n + 1);
+    recordAttempt(kitId, sessionId, { flashcardId: currentCardId, confidence, skipped }, token).catch(() => {});
+    if (cardIndex < queue.length - 1) {
+      setCardIndex((i) => i + 1);
+      setFlipped(false);
+    } else {
+      setScreen("summary");
+    }
+  };
+  handleAttemptRef.current = handleAttempt;
+
   const handleStartSession = async () => {
     setSessionStarting(true);
     try {
       const { sessionId: sid } = await startPracticeSession(kitId, token);
-      const q = kit.flashcards.map((f) => f.id);
+      let q: string[];
+      try {
+        q = await getPracticeQueue(kitId, token);
+        if (!q || q.length === 0) q = kit.flashcards.map((f) => f.id);
+      } catch {
+        q = kit.flashcards.map((f) => f.id);
+      }
       setSessionId(sid);
       setQueue(q);
       setCardIndex(0);
@@ -1529,18 +1873,6 @@ function FlashcardPracticeMode({
       alert("Failed to start practice session: " + e.message);
     } finally {
       setSessionStarting(false);
-    }
-  };
-
-  const handleAttempt = async (confidence: number | null, skipped: boolean) => {
-    if (!sessionId || !currentCardId) return;
-    setAttemptedCount((n) => n + 1);
-    recordAttempt(kitId, sessionId, { flashcardId: currentCardId, confidence, skipped }, token).catch(() => {});
-    if (cardIndex < queue.length - 1) {
-      setCardIndex((i) => i + 1);
-      setFlipped(false);
-    } else {
-      setScreen("summary");
     }
   };
 
@@ -1567,30 +1899,34 @@ function FlashcardPracticeMode({
     } catch {} finally { setDetailLoading(false); }
   };
 
-  // Landing Screen
   if (screen === "landing") {
     return (
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
+      <div className="space-y-5">
+        <div className="flex items-center justify-between flex-wrap gap-2">
           <h3 className="text-white font-bold text-lg flex items-center gap-2">
             <BookOpen className="w-5 h-5 text-pink-400" />Flashcard Practice Studio
           </h3>
-          <button onClick={onExit} className="flex items-center gap-1.5 text-white/40 hover:text-white text-sm font-medium transition-colors">
+          <button onClick={onExit} id="fc-back-overview" className="flex items-center gap-1.5 text-white/40 hover:text-white text-sm font-medium transition-colors">
             <ArrowLeft className="w-4 h-4" />Back to Overview
           </button>
         </div>
 
-        <button onClick={handleStartSession} disabled={sessionStarting}
+        <div className="bg-[#0f111a]/60 border border-pink-500/20 rounded-2xl p-4 text-xs text-white/50 space-y-1">
+          <p className="font-bold text-pink-300 uppercase tracking-wider text-[10px]">Smart Personalized Queue</p>
+          <p>Cards you struggled with previously appear first. Low-confidence cards are prioritized to boost mastery faster.</p>
+        </div>
+
+        <button onClick={handleStartSession} disabled={sessionStarting} id="fc-start-session"
           className="w-full flex items-center justify-center gap-3 p-5 bg-gradient-to-r from-pink-600 via-purple-600 to-indigo-600 hover:from-pink-500 hover:to-indigo-500 text-white font-bold rounded-2xl transition-all shadow-xl shadow-pink-950/30 disabled:opacity-50 text-base">
           {sessionStarting ? <Loader2 className="w-5 h-5 animate-spin" /> : <PlayCircle className="w-5 h-5" />}
-          Start Interactive Flashcard Practice
+          Start Personalized Flashcard Session
         </button>
 
         {sessionsLoading ? (
           <div className="flex justify-center py-6"><Loader2 className="w-6 h-6 text-pink-400 animate-spin" /></div>
         ) : sessions.length === 0 ? (
           <div className="text-center text-white/30 text-sm py-8 bg-white/[0.01] border border-white/[0.04] rounded-2xl">
-            No completed flashcard sessions yet — launch your first session above!
+            No completed sessions yet — launch your first session above!
           </div>
         ) : (
           <div className="space-y-3">
@@ -1613,7 +1949,6 @@ function FlashcardPracticeMode({
     );
   }
 
-  // Session Detail
   if (screen === "detail") {
     return (
       <div className="space-y-4">
@@ -1624,13 +1959,13 @@ function FlashcardPracticeMode({
           <p className="text-white/40 text-sm">Failed to load session details.</p>
         ) : (
           <div className="space-y-3">
-            <h4 className="text-white font-bold">Session Detail ({new Date(detailSession.startedAt).toLocaleDateString()})</h4>
+            <h4 className="text-white font-bold">Session on {new Date(detailSession.startedAt).toLocaleDateString()}</h4>
             {detailSession.attempts.map((a) => (
               <div key={a.id} className="p-4 bg-[#0f111a] border border-white/[0.07] rounded-xl space-y-1">
                 <p className="text-white text-sm font-semibold">{a.front}</p>
                 <p className="text-white/60 text-xs">{a.back}</p>
-                <p className="text-xs text-pink-300 font-mono mt-1">
-                  {a.skipped ? "Skipped" : `Confidence Rating: ${a.confidence}/10`}
+                <p className={`text-xs font-mono mt-1 ${a.skipped ? "text-white/30" : (a.confidence ?? 0) >= 7 ? "text-emerald-300" : "text-rose-300"}`}>
+                  {a.skipped ? "Skipped" : `Confidence: ${a.confidence}/10`}
                 </p>
               </div>
             ))}
@@ -1640,7 +1975,6 @@ function FlashcardPracticeMode({
     );
   }
 
-  // Summary Screen
   if (screen === "summary") {
     return (
       <div className="flex flex-col items-center justify-center py-10 space-y-6 text-center">
@@ -1649,13 +1983,14 @@ function FlashcardPracticeMode({
         </div>
         <div>
           <h3 className="text-white text-xl font-bold">Deck Completed!</h3>
-          <p className="text-white/40 text-sm mt-1">{attemptedCount} flashcards reviewed in this deck session.</p>
+          <p className="text-white/40 text-sm mt-1">{attemptedCount} flashcards reviewed.</p>
+          <p className="text-white/30 text-xs mt-1">Your next session will prioritize cards you found difficult.</p>
         </div>
         <div className="flex flex-col gap-3 w-full max-w-xs">
-          <button onClick={handleEndSession} disabled={sessionEnding}
+          <button onClick={handleEndSession} disabled={sessionEnding} id="fc-save-session"
             className="flex items-center justify-center gap-2 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl transition-all shadow-lg shadow-emerald-600/20 disabled:opacity-50">
             {sessionEnding ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-            Save Session History
+            Save Session
           </button>
           <button onClick={onExit} className="py-3 bg-white/[0.05] hover:bg-white/10 border border-white/10 text-white/70 font-semibold rounded-xl transition-colors">
             Exit
@@ -1665,73 +2000,347 @@ function FlashcardPracticeMode({
     );
   }
 
-  // Card Flip Loop
-  const progress = ((cardIndex + 1) / queue.length) * 100;
+  // Card Session screen — FIXED: no scrolling, everything fits in viewport
+  const progress = queue.length > 0 ? ((cardIndex + 1) / queue.length) * 100 : 0;
 
   return (
-    <div className="space-y-6 max-w-xl mx-auto">
-      <div className="flex items-center justify-between text-xs text-white/40 font-mono">
+    <div ref={containerRef} tabIndex={-1} className="flex flex-col gap-3 outline-none focus:outline-none">
+      {/* Header */}
+      <div className="flex items-center justify-between text-xs text-white/40 font-mono shrink-0">
         <span>Card {cardIndex + 1} of {queue.length}</span>
-        <button onClick={() => { if (window.confirm("Exit session?")) onExit(); }} className="flex items-center gap-1 hover:text-white transition-colors">
-          <X className="w-3.5 h-3.5" />Exit Session
-        </button>
+        <div className="flex items-center gap-3">
+          <span className="hidden md:block text-white/20 text-[10px]">Space=flip · S=skip · 1-5=rate</span>
+          <button id="fc-exit-session"
+            onClick={() => { if (window.confirm("Exit session? Progress won't be saved.")) onExit(); }}
+            className="flex items-center gap-1 hover:text-white transition-colors">
+            <X className="w-3.5 h-3.5" />Exit
+          </button>
+        </div>
       </div>
-      <div className="h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
+
+      {/* Progress bar */}
+      <div className="h-1.5 bg-white/[0.06] rounded-full overflow-hidden shrink-0">
         <div className="h-full bg-pink-500 rounded-full transition-all duration-300 shadow-[0_0_8px_rgba(236,72,153,0.6)]" style={{ width: `${progress}%` }} />
       </div>
 
       {currentCard ? (
-        <div className="flex flex-col items-center gap-6">
-          <div className="w-full" style={{ perspective: "1000px" }}>
+        <>
+          {/* 3D Flip Card — clamped height, always fits in viewport without scroll */}
+          <div className="w-full shrink-0" style={{ perspective: "1000px", height: "clamp(180px, 34vh, 270px)" }}>
             <button
+              id="fc-card-flip"
+              aria-label={flipped ? "Card answer — click to flip back" : "Flip card to reveal answer"}
               onClick={() => setFlipped((v) => !v)}
-              onKeyDown={(e) => ["Enter", " "].includes(e.key) && setFlipped((v) => !v)}
-              className="w-full relative"
-              style={{ height: 260, transformStyle: "preserve-3d", transition: "transform 0.45s cubic-bezier(0.4,0,0.2,1)", transform: flipped ? "rotateY(180deg)" : "rotateY(0deg)" }}
+              className="w-full h-full relative focus:outline-none focus-visible:ring-2 focus-visible:ring-pink-500 rounded-3xl"
+              style={{ transformStyle: "preserve-3d", transition: "transform 0.45s cubic-bezier(0.4,0,0.2,1)", transform: flipped ? "rotateY(180deg)" : "rotateY(0deg)" }}
             >
               {/* Front */}
-              <div className="absolute inset-0 rounded-3xl bg-[#0f111a] border border-white/15 flex flex-col items-center justify-center p-8 text-center shadow-2xl"
+              <div className="absolute inset-0 rounded-3xl bg-[#0f111a] border border-white/15 flex flex-col items-center justify-center p-5 sm:p-8 text-center shadow-2xl"
                 style={{ backfaceVisibility: "hidden" }}>
-                <span className="text-[10px] text-violet-400 uppercase font-bold tracking-widest mb-4">Question / Term</span>
-                <p className="text-white text-xl font-bold leading-snug">{currentCard.front}</p>
-                {!flipped && <p className="text-white/30 text-xs mt-6">Click or press Space to reveal answer</p>}
+                <span className="text-[10px] text-violet-400 uppercase font-bold tracking-widest mb-3">Question / Term</span>
+                <p className="text-white font-bold leading-snug text-sm sm:text-base md:text-lg">{currentCard.front}</p>
+                <p className="text-white/30 text-xs mt-4">Click or press Space to reveal</p>
               </div>
-
               {/* Back */}
-              <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-pink-950/40 to-purple-950/40 border border-pink-500/30 flex flex-col items-center justify-center p-8 text-center shadow-2xl"
+              <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-pink-950/40 to-purple-950/40 border border-pink-500/30 flex flex-col items-center justify-center p-5 sm:p-8 text-center shadow-2xl overflow-y-auto"
                 style={{ backfaceVisibility: "hidden", transform: "rotateY(180deg)" }}>
-                <span className="text-[10px] text-pink-300 uppercase font-bold tracking-widest mb-4">Answer Explanation</span>
-                <p className="text-white/90 text-base leading-relaxed">{currentCard.back}</p>
+                <span className="text-[10px] text-pink-300 uppercase font-bold tracking-widest mb-3">Answer Explanation</span>
+                <p className="text-white/90 leading-relaxed text-sm sm:text-base">{currentCard.back}</p>
               </div>
             </button>
           </div>
 
-          {flipped ? (
-            <div className="w-full space-y-3 animate-in fade-in duration-200">
-              <p className="text-white/40 text-xs text-center font-semibold uppercase tracking-wider">How well did you know this?</p>
-              <div className="grid grid-cols-5 gap-2">
-                {CONFIDENCE_RATING_OPTIONS.map(({ label, value }) => (
-                  <button key={value} onClick={() => handleAttempt(value, false)}
-                    className="flex flex-col items-center gap-1 py-3 bg-white/[0.04] hover:bg-pink-500/20 hover:border-pink-500/40 border border-white/[0.08] rounded-xl text-xs text-white/70 hover:text-white transition-all">
-                    <span className="font-bold text-base leading-none">{value}</span>
-                    <span className="text-[9px] text-center leading-tight">{label}</span>
-                  </button>
-                ))}
+          {/* Action area — always visible, no scroll required */}
+          <div className="shrink-0">
+            {flipped ? (
+              <div className="space-y-2 animate-in fade-in duration-200">
+                <p className="text-white/40 text-xs text-center font-semibold uppercase tracking-wider">How well did you know this?</p>
+                <div className="grid grid-cols-5 gap-1.5 sm:gap-2">
+                  {CONFIDENCE_RATING_OPTIONS.map(({ label, value }, idx) => (
+                    <button key={value} id={`fc-rate-${value}`}
+                      onClick={() => handleAttempt(value, false)}
+                      title={`Rate ${value}/10 — Press key ${idx + 1}`}
+                      className="flex flex-col items-center gap-0.5 py-2.5 sm:py-3 bg-white/[0.04] hover:bg-pink-500/20 hover:border-pink-500/40 border border-white/[0.08] rounded-xl text-xs text-white/70 hover:text-white transition-all active:scale-95">
+                      <span className="font-bold text-sm sm:text-base leading-none">{value}</span>
+                      <span className="text-[8px] sm:text-[9px] text-center leading-tight">{label}</span>
+                    </button>
+                  ))}
+                </div>
+                <button id="fc-skip" onClick={() => handleAttempt(null, true)}
+                  className="w-full flex items-center justify-center gap-2 py-2 text-white/30 hover:text-white/60 text-xs border border-white/[0.06] hover:border-white/10 rounded-xl transition-colors">
+                  <SkipForward className="w-3.5 h-3.5" />Skip this card
+                </button>
               </div>
-            </div>
-          ) : (
-            <button onClick={() => setFlipped(true)}
-              className="px-8 py-3 bg-pink-600 hover:bg-pink-500 text-white font-bold text-sm rounded-xl transition-all shadow-lg shadow-pink-600/30">
-              Reveal Answer
-            </button>
-          )}
-        </div>
+            ) : (
+              <div className="flex gap-2">
+                <button id="fc-reveal" onClick={() => setFlipped(true)}
+                  className="flex-1 py-3 bg-pink-600 hover:bg-pink-500 text-white font-bold text-sm rounded-xl transition-all shadow-lg shadow-pink-600/30 active:scale-[0.98]">
+                  Reveal Answer
+                </button>
+                <button id="fc-skip-before-reveal" onClick={() => handleAttempt(null, true)} title="Skip (press S)"
+                  className="px-4 py-3 bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-white/40 hover:text-white rounded-xl transition-all" aria-label="Skip card">
+                  <SkipForward className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+          </div>
+        </>
       ) : (
         <p className="text-white/30 text-center py-10">No more cards in queue.</p>
       )}
     </div>
   );
 }
+
+// ─── Mock Exam History Tab ────────────────────────────────────────────────────
+
+function MockExamHistoryTab({
+  kitId, token, onLaunchMock, kit,
+}: {
+  kitId: string;
+  token: string;
+  onLaunchMock: (qs: GeneratedQuestion[], title: string) => void;
+  kit: AppendixAKit;
+}) {
+  const [exams, setExams] = useState<MockExamSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedExam, setSelectedExam] = useState<MockExamDetail | null>(null);
+  const [examLoading, setExamLoading] = useState(false);
+  const [generatingReport, setGeneratingReport] = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    listMockExams(kitId, token)
+      .then((data) => setExams(data))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [kitId, token]);
+
+  const handleViewExam = async (examId: string) => {
+    setExamLoading(true);
+    try {
+      const detail = await getMockExamDetail(kitId, examId, token);
+      setSelectedExam(detail);
+    } catch (e: any) {
+      alert("Failed to load exam: " + e.message);
+    } finally {
+      setExamLoading(false);
+    }
+  };
+
+  const handleGenerateReport = async (examId: string) => {
+    setGeneratingReport(true);
+    try {
+      const report = await generateMockExamAiReport(kitId, examId, token);
+      setSelectedExam((prev) => prev ? { ...prev, aiReport: report } : prev);
+    } catch (e: any) {
+      alert("Failed to generate AI report: " + e.message);
+    } finally {
+      setGeneratingReport(false);
+    }
+  };
+
+  const formatDuration = (sec: number | null) => {
+    if (!sec) return "—";
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}m ${s}s`;
+  };
+
+  const getGradeColor = (score: number) => {
+    if (score >= 80) return "text-emerald-300";
+    if (score >= 60) return "text-amber-300";
+    return "text-rose-300";
+  };
+
+  // Detail view
+  if (selectedExam) {
+    const rated = selectedExam.questions.filter((q) => q.confidence !== null);
+    const avgConf = rated.length > 0 ? (rated.reduce((s, q) => s + (q.confidence ?? 0), 0) / rated.length).toFixed(1) : null;
+    const flagged = selectedExam.questions.filter((q) => q.flagged);
+
+    return (
+      <div className="space-y-5">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <button onClick={() => setSelectedExam(null)} className="flex items-center gap-1.5 text-white/40 hover:text-white text-sm transition-colors">
+            <ArrowLeft className="w-4 h-4" />Back to Exam History
+          </button>
+          <div className="flex items-center gap-2">
+            {!selectedExam.aiReport && (
+              <button onClick={() => handleGenerateReport(selectedExam.id)} disabled={generatingReport}
+                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold text-xs rounded-xl shadow-md disabled:opacity-60 transition-all">
+                {generatingReport ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bot className="w-4 h-4" />}
+                {generatingReport ? "Generating..." : "Get AI Coach Report"}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Exam Header */}
+        <div className="bg-[#0f111a]/80 border border-white/[0.08] rounded-2xl p-5 space-y-3">
+          <h3 className="text-white font-bold text-lg">{selectedExam.title}</h3>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+            <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3">
+              <div className="text-white font-bold text-xl">{selectedExam.questions.length}</div>
+              <div className="text-white/40 text-[10px] uppercase">Questions</div>
+            </div>
+            <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3">
+              <div className="text-white font-bold text-xl">{avgConf ?? "—"}</div>
+              <div className="text-white/40 text-[10px] uppercase">Avg Confidence</div>
+            </div>
+            <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3">
+              <div className="text-white font-bold text-xl">{flagged.length}</div>
+              <div className="text-white/40 text-[10px] uppercase">Flagged</div>
+            </div>
+            <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3">
+              <div className="text-white font-bold text-xl">{formatDuration(selectedExam.durationSec)}</div>
+              <div className="text-white/40 text-[10px] uppercase">Duration</div>
+            </div>
+          </div>
+        </div>
+
+        {/* AI Report */}
+        {selectedExam.aiReport && (
+          <div className="bg-gradient-to-br from-violet-900/20 to-indigo-900/20 border border-violet-500/30 rounded-2xl p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <h4 className="text-white font-bold text-sm flex items-center gap-2"><Bot className="w-4 h-4 text-violet-400" />AI Coaching Report</h4>
+              <div className={`text-3xl font-black ${getGradeColor(selectedExam.aiReport.overallScore)}`}>{selectedExam.aiReport.grade} <span className="text-base font-bold text-white/60">{selectedExam.aiReport.overallScore}/100</span></div>
+            </div>
+            <p className="text-white/70 text-sm leading-relaxed">{selectedExam.aiReport.summary}</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <p className="text-emerald-300 text-xs font-bold uppercase">Strengths</p>
+                {selectedExam.aiReport.strengths.map((s, i) => <p key={i} className="text-white/70 text-xs flex gap-2"><span className="text-emerald-400">✓</span>{s}</p>)}
+              </div>
+              <div className="space-y-2">
+                <p className="text-rose-300 text-xs font-bold uppercase">Needs Work</p>
+                {selectedExam.aiReport.weaknesses.map((w, i) => <p key={i} className="text-white/70 text-xs flex gap-2"><span className="text-rose-400">→</span>{w}</p>)}
+              </div>
+            </div>
+            <div className="space-y-1">
+              <p className="text-violet-300 text-xs font-bold uppercase">Next Steps</p>
+              {selectedExam.aiReport.nextSteps.map((s, i) => (
+                <p key={i} className="text-white/70 text-xs flex gap-2">
+                  <span className="w-4 h-4 rounded-full bg-violet-600 text-white text-[9px] font-bold flex items-center justify-center shrink-0">{i + 1}</span>{s}
+                </p>
+              ))}
+            </div>
+            <p className="text-violet-200/60 text-xs italic text-center">"{selectedExam.aiReport.motivationalNote}"</p>
+          </div>
+        )}
+
+        {/* Question Review */}
+        <div className="space-y-3">
+          <h4 className="text-white/60 text-xs font-bold uppercase tracking-wider">Question-by-Question Review</h4>
+          {selectedExam.questions.map((q, i) => (
+            <div key={q.id ?? i} className={`p-4 border rounded-2xl space-y-2 ${q.flagged ? "bg-amber-900/10 border-amber-500/25" : "bg-[#0f111a] border-white/[0.07]"}`}>
+              <div className="flex items-start justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-violet-400">Q{i + 1}</span>
+                  <span className={`px-2 py-0.5 text-[10px] font-bold uppercase rounded-lg border ${CATEGORY_THEMES[q.category as QuestionCategory]?.bg ?? "bg-white/5"} ${CATEGORY_THEMES[q.category as QuestionCategory]?.text ?? "text-white/60"} ${CATEGORY_THEMES[q.category as QuestionCategory]?.border ?? "border-white/10"}`}>
+                    {q.category}
+                  </span>
+                  {q.flagged && <span className="text-[10px] bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded-full border border-amber-500/30 font-bold">Flagged</span>}
+                </div>
+                {q.confidence !== null && q.confidence !== undefined ? (
+                  <span className={`text-sm font-bold ${q.confidence >= 7 ? "text-emerald-300" : q.confidence >= 4 ? "text-amber-300" : "text-rose-300"}`}>
+                    {q.confidence}/10
+                  </span>
+                ) : <span className="text-white/30 text-xs">Not rated</span>}
+              </div>
+              <p className="text-white text-sm font-semibold leading-snug">{q.questionText}</p>
+              <details className="group">
+                <summary className="text-xs text-violet-300 cursor-pointer hover:text-violet-200 transition-colors font-semibold">View answer outline</summary>
+                <p className="text-white/60 text-xs mt-2 leading-relaxed bg-violet-900/10 border border-violet-500/20 rounded-xl p-3">{q.answerOutline}</p>
+              </details>
+              {q.userNotes && (
+                <div className="bg-white/[0.02] border border-white/[0.06] rounded-xl p-2.5">
+                  <p className="text-white/40 text-[10px] font-bold uppercase">Your Notes</p>
+                  <p className="text-white/70 text-xs mt-1">{q.userNotes}</p>
+                </div>
+              )}
+              {selectedExam.aiReport?.questionFeedback?.find((f) => f.position === i) && (
+                <div className={`text-xs p-2.5 rounded-xl border ${selectedExam.aiReport.questionFeedback.find((f) => f.position === i)!.performance === "strong" ? "bg-emerald-900/15 border-emerald-500/25 text-emerald-200" : selectedExam.aiReport.questionFeedback.find((f) => f.position === i)!.performance === "needs_work" ? "bg-rose-900/15 border-rose-500/25 text-rose-200" : "bg-white/[0.03] border-white/[0.08] text-white/60"}`}>
+                  <span className="font-bold">AI Feedback: </span>
+                  {selectedExam.aiReport.questionFeedback.find((f) => f.position === i)!.feedback}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <h3 className="text-white font-bold text-lg flex items-center gap-2">
+          <ClipboardList className="w-5 h-5 text-violet-400" />Mock Exam History
+        </h3>
+        <button
+          onClick={() => onLaunchMock(kit.questions, `${kit.role.title} Full Mock Exam`)}
+          className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-violet-600/25 transition-all"
+        >
+          <PlayCircle className="w-4 h-4" />New Mock Exam
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 text-violet-400 animate-spin" /></div>
+      ) : exams.length === 0 ? (
+        <div className="text-center py-16 space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center mx-auto">
+            <ClipboardList className="w-8 h-8 text-violet-400/50" />
+          </div>
+          <div>
+            <h4 className="text-white font-semibold">No mock exams yet</h4>
+            <p className="text-white/40 text-sm mt-1">Take your first mock exam to see your progress here.</p>
+          </div>
+          <button onClick={() => onLaunchMock(kit.questions, `${kit.role.title} Full Mock Exam`)}
+            className="mx-auto flex items-center gap-2 px-5 py-2.5 bg-violet-600 hover:bg-violet-500 text-white font-bold text-sm rounded-xl shadow-lg shadow-violet-600/25 transition-all">
+            <PlayCircle className="w-4 h-4" />Start Your First Mock Exam
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {exams.map((exam) => {
+            return (
+              <button key={exam.id} onClick={() => handleViewExam(exam.id)}
+                className="w-full flex items-center justify-between p-4 bg-[#0f111a] border border-white/[0.07] hover:border-violet-500/30 rounded-2xl transition-all text-left group">
+                <div className="space-y-1.5">
+                  <p className="text-white font-bold text-sm group-hover:text-violet-300 transition-colors">{exam.title}</p>
+                  <div className="flex flex-wrap items-center gap-3 text-xs text-white/40">
+                    <span>{new Date(exam.startedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+                    <span>{exam.questionCount} questions</span>
+                    <span>{formatDuration(exam.durationSec)}</span>
+                    {exam.hasAiReport && (
+                      <span className="flex items-center gap-1 text-violet-300 font-semibold">
+                        <Bot className="w-3.5 h-3.5" />AI Report
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <ChevronRight className="w-4 h-4 text-white/30 group-hover:text-violet-400 transition-colors shrink-0" />
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {examLoading && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-[#0f111a] border border-white/10 rounded-2xl p-6 flex items-center gap-3">
+            <Loader2 className="w-5 h-5 text-violet-400 animate-spin" />
+            <p className="text-white text-sm font-semibold">Loading exam...</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+
 
 // ─── Main Kit Detail Page Container ───────────────────────────────────────────
 
@@ -1747,7 +2356,7 @@ export default function KitDetailPage() {
   const [kit, setKit] = useState<AppendixAKit | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"overview" | "schedule" | "practice">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "schedule" | "practice" | "mock-history">("overview");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const unsubRef = useRef<(() => void) | null>(null);
@@ -1944,15 +2553,20 @@ export default function KitDetailPage() {
           </div>
 
           {/* Navigation Tab Bar */}
-          <div className="flex gap-1.5 bg-[#0d0f18] border border-white/[0.08] p-1.5 rounded-2xl w-fit shadow-lg">
-            {(["overview", "schedule", "practice"] as const).map((tab) => (
-              <button key={tab} onClick={() => setActiveTab(tab)}
-                className={`px-6 py-2.5 rounded-xl text-xs font-extrabold transition-all ${
+          <div className="flex flex-wrap gap-1.5 bg-[#0d0f18] border border-white/[0.08] p-1.5 rounded-2xl w-fit shadow-lg">
+            {(["overview", "schedule", "practice", "mock-history"] as const).map((tab) => (
+              <button key={tab} id={`tab-${tab}`} onClick={() => setActiveTab(tab)}
+                className={`px-4 sm:px-6 py-2.5 rounded-xl text-xs font-extrabold transition-all ${
                   activeTab === tab ? "bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-lg shadow-violet-600/30" : "text-white/40 hover:text-white"
                 }`}>
                 {tab === "overview" && "Overview & Builder"}
                 {tab === "schedule" && "Study Schedule"}
                 {tab === "practice" && "Flashcard Studio"}
+                {tab === "mock-history" && (
+                  <span className="flex items-center gap-1.5">
+                    <ClipboardList className="w-3.5 h-3.5" />Mock Exams
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -1967,6 +2581,9 @@ export default function KitDetailPage() {
           {activeTab === "practice" && (
             <FlashcardPracticeMode kit={kit} kitId={kitId} token={token!} onExit={() => setActiveTab("overview")} />
           )}
+          {activeTab === "mock-history" && (
+            <MockExamHistoryTab kitId={kitId} token={token!} onLaunchMock={launchMockExam} kit={kit} />
+          )}
         </div>
       ) : null}
 
@@ -1976,6 +2593,8 @@ export default function KitDetailPage() {
           questions={mockExamState.questions}
           title={mockExamState.title}
           subtitle={`Interactive Mock Test • ${mockExamState.questions.length} Question Prompt${mockExamState.questions.length === 1 ? "" : "s"}`}
+          kitId={kitId}
+          token={token!}
           onClose={() => setMockExamState({ isOpen: false, questions: [], title: "" })}
         />
       )}

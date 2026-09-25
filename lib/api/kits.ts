@@ -531,3 +531,106 @@ export async function getPracticeSessionDetail(
   const json = await res.json();
   return json.session;
 }
+
+// ─── Mock Exams ───────────────────────────────────────────────────────────────
+
+export interface MockExamQuestionRecord {
+  id?: string;
+  questionId: string;
+  questionText: string;
+  answerOutline: string;
+  category: string;
+  difficulty: number;
+  userNotes?: string;
+  confidence?: number | null;
+  flagged?: boolean;
+  position: number;
+}
+
+export interface MockExamSummary {
+  id: string;
+  title: string;
+  startedAt: string;
+  finishedAt: string | null;
+  durationSec: number | null;
+  questionCount: number;
+  hasAiReport: boolean;
+}
+
+export interface AiCoachReport {
+  overallScore: number;
+  grade: string;
+  summary: string;
+  strengths: string[];
+  weaknesses: string[];
+  focusAreas: {
+    area: string;
+    priority: 'high' | 'medium' | 'low';
+    advice: string;
+    studyTopics: string[];
+  }[];
+  questionFeedback: {
+    position: number;
+    performance: 'strong' | 'adequate' | 'needs_work';
+    feedback: string;
+  }[];
+  nextSteps: string[];
+  motivationalNote: string;
+}
+
+export interface MockExamDetail {
+  id: string;
+  title: string;
+  startedAt: string;
+  finishedAt: string | null;
+  durationSec: number | null;
+  aiReport: AiCoachReport | null;
+  questions: MockExamQuestionRecord[];
+}
+
+export async function saveMockExam(
+  kitId: string,
+  data: {
+    title: string;
+    startedAt: string;
+    finishedAt: string;
+    durationSec: number;
+    questions: MockExamQuestionRecord[];
+  },
+  token: string
+): Promise<{ examId: string }> {
+  const res = await apiFetch(`/api/kits/${kitId}/mock-exams`, token, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export async function listMockExams(kitId: string, token: string): Promise<MockExamSummary[]> {
+  const res = await apiFetch(`/api/kits/${kitId}/mock-exams`, token);
+  const json = await res.json();
+  return json.exams ?? [];
+}
+
+export async function getMockExamDetail(
+  kitId: string,
+  examId: string,
+  token: string
+): Promise<MockExamDetail> {
+  const res = await apiFetch(`/api/kits/${kitId}/mock-exams/${examId}`, token);
+  const json = await res.json();
+  return json.exam;
+}
+
+export async function generateMockExamAiReport(
+  kitId: string,
+  examId: string,
+  token: string
+): Promise<AiCoachReport> {
+  const res = await apiFetch(`/api/kits/${kitId}/mock-exams/${examId}/ai-report`, token, {
+    method: 'POST',
+  });
+  const json = await res.json();
+  return json.report;
+}
+
