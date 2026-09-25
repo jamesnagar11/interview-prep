@@ -32,6 +32,7 @@ import {
 import type {
   AppendixAKit,
   KitStatus,
+  KitProgressPayload,
   GeneratedQuestion,
   GeneratedFlashcard,
   QuestionCategory,
@@ -154,29 +155,205 @@ function SectionSpinner() {
   );
 }
 
-function GeneratingView({ status }: { status: KitStatus }) {
-  const stages: KitStatus[] = ["RESEARCHING", "EXTRACTING", "GENERATING", "CHECKING_COVERAGE", "SCHEDULING"];
-  const idx = stages.indexOf(status);
+interface GeneratingViewProps {
+  status: KitStatus;
+  latestProgress?: KitProgressPayload | null;
+  progressLogs?: KitProgressPayload[];
+}
+
+const PRO_TIPS = [
+  "Pro Tip: Use the STAR method (Situation, Task, Action, Result) for behavioural questions.",
+  "Pro Tip: System design interviews focus heavily on trade-offs, scalability, and bottleneck analysis.",
+  "Pro Tip: Reviewing technical concepts 24 hours before an interview boosts recall by over 40%.",
+  "Pro Tip: Frame answer outlines around business impact and technical depth for senior roles.",
+  "Pro Tip: Practice coding questions out loud to articulate your thought process clearly.",
+];
+
+function GeneratingView({ status, latestProgress, progressLogs = [] }: GeneratingViewProps) {
+  const [tipIndex, setTipIndex] = useState(0);
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const logContainerRef = useRef<HTMLDivElement>(null);
+
+  // Rotate tips
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setTipIndex((prev) => (prev + 1) % PRO_TIPS.length);
+    }, 4500);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Update countdown ticker
+  useEffect(() => {
+    if (latestProgress?.estimatedSecondsRemaining !== undefined) {
+      setCountdown(latestProgress.estimatedSecondsRemaining);
+    }
+  }, [latestProgress?.estimatedSecondsRemaining]);
+
+  useEffect(() => {
+    if (countdown === null || countdown <= 0) return;
+    const ticker = setInterval(() => {
+      setCountdown((prev) => (prev && prev > 1 ? prev - 1 : 1));
+    }, 1000);
+    return () => clearInterval(ticker);
+  }, [countdown]);
+
+  // Auto-scroll logs
+  useEffect(() => {
+    if (logContainerRef.current) {
+      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+    }
+  }, [progressLogs.length]);
+
+  const stages: { key: KitStatus; title: string; desc: string; icon: string }[] = [
+    { key: "RESEARCHING", title: "Research & Crawling", desc: "Company site & JD", icon: "🔍" },
+    { key: "EXTRACTING", title: "Requirements Synthesis", desc: "Extracting skills", icon: "📝" },
+    { key: "GENERATING", title: "Question Bank Gen", desc: "Crafting technical Qs", icon: "🧠" },
+    { key: "CHECKING_COVERAGE", title: "Coverage & Flashcards", desc: "Auditing coverage", icon: "🎴" },
+    { key: "SCHEDULING", title: "Study Schedule", desc: "Interleaved plan", icon: "📅" },
+  ];
+
+  const currentStageKeys = stages.map((s) => s.key);
+  const currentStageIdx = currentStageKeys.indexOf(status);
+  const effectiveIdx = currentStageIdx >= 0 ? currentStageIdx : 0;
+  const progressPercent = latestProgress?.progress ?? Math.min(95, Math.max(10, (effectiveIdx + 1) * 20));
+
+  const displayStepTitle = latestProgress?.step || STATUS_LABELS[status] || "Processing Prep Kit Pipeline";
+  const displayMessage = latestProgress?.message || "Analyzing job description & crafting custom interview prep materials... Sit tight!";
+
   return (
-    <div className="flex flex-col items-center justify-center py-20 space-y-6">
-      <div className="relative">
-        <div className="absolute -inset-4 rounded-full bg-violet-600/20 blur-xl animate-pulse" />
-        <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500/20 to-indigo-500/20 border border-violet-500/30 flex items-center justify-center relative">
-          <Loader2 className="w-8 h-8 text-violet-400 animate-spin" />
+    <div className="max-w-4xl mx-auto py-10 px-4 space-y-8 animate-in fade-in zoom-in-95 duration-300">
+      {/* Top Header Card with Glowing Orb */}
+      <div className="relative bg-[#0d0f19] border border-white/10 rounded-3xl p-8 shadow-2xl overflow-hidden text-center space-y-6">
+        <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-violet-600 via-pink-500 to-emerald-400 animate-pulse" />
+
+        {/* Pulsing AI Energy Ring */}
+        <div className="relative mx-auto w-24 h-24 flex items-center justify-center">
+          <div className="absolute -inset-4 rounded-full bg-gradient-to-r from-violet-600/30 to-indigo-600/30 blur-xl animate-pulse" />
+          <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-violet-500/20 via-purple-500/10 to-indigo-500/20 border border-violet-500/40 flex items-center justify-center shadow-lg relative">
+            <Loader2 className="w-10 h-10 text-violet-400 animate-spin" />
+            <Sparkles className="w-4 h-4 text-pink-400 absolute top-2 right-2 animate-bounce" />
+          </div>
+        </div>
+
+        {/* Step Title & Subtitle */}
+        <div className="space-y-2 max-w-xl mx-auto">
+          <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-violet-500/10 text-violet-300 border border-violet-500/20">
+            <span className="w-2 h-2 rounded-full bg-violet-400 animate-ping" />
+            Live Pipeline Running
+          </div>
+          <h2 className="text-2xl font-black text-white tracking-tight">{displayStepTitle}</h2>
+          <p className="text-white/70 text-sm leading-relaxed">{displayMessage}</p>
+        </div>
+
+        {/* Progress Bar & Time Countdown */}
+        <div className="space-y-3 max-w-lg mx-auto">
+          <div className="flex items-center justify-between text-xs font-bold text-white/60">
+            <span className="flex items-center gap-1.5 text-violet-300 font-mono">
+              <ZapIcon className="w-4 h-4 text-violet-400" />
+              {progressPercent}% Completed
+            </span>
+            {countdown !== null && countdown > 0 && (
+              <span className="flex items-center gap-1 text-emerald-300 bg-emerald-500/10 px-2.5 py-0.5 rounded-full border border-emerald-500/20 font-mono">
+                <Clock className="w-3.5 h-3.5 text-emerald-400" />
+                Sit tight! ~{countdown}s remaining
+              </span>
+            )}
+          </div>
+
+          <div className="h-3 w-full bg-white/[0.06] rounded-full overflow-hidden p-0.5 border border-white/10 shadow-inner">
+            <div
+              className="h-full bg-gradient-to-r from-violet-600 via-pink-500 to-emerald-400 rounded-full transition-all duration-700 ease-out shadow-[0_0_12px_rgba(139,92,246,0.8)]"
+              style={{ width: `${progressPercent}%` }}
+            />
+          </div>
         </div>
       </div>
-      <div className="text-center space-y-1">
-        <p className="text-white font-semibold text-lg">{STATUS_LABELS[status]}</p>
-        <p className="text-white/40 text-sm">Building your AI interview prepkit…</p>
+
+      {/* 5-Stage Stepper Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
+        {stages.map((stg, i) => {
+          const isFinished = i < effectiveIdx;
+          const isActive = i === effectiveIdx;
+          return (
+            <div
+              key={stg.key}
+              className={`p-4 rounded-2xl border transition-all duration-300 flex flex-col justify-between space-y-2 ${
+                isFinished
+                  ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300 shadow-emerald-500/5"
+                  : isActive
+                  ? "bg-violet-600/15 border-violet-500/40 text-white shadow-lg shadow-violet-600/20 ring-1 ring-violet-500/50"
+                  : "bg-[#0d0f18] border-white/[0.06] text-white/30"
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-lg">{stg.icon}</span>
+                {isFinished ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                ) : isActive ? (
+                  <Loader2 className="w-4 h-4 text-violet-400 animate-spin shrink-0" />
+                ) : (
+                  <div className="w-2 h-2 rounded-full bg-white/20 shrink-0" />
+                )}
+              </div>
+              <div>
+                <p className="text-xs font-bold truncate">{stg.title}</p>
+                <p className="text-[10px] text-white/40 truncate mt-0.5">{stg.desc}</p>
+              </div>
+            </div>
+          );
+        })}
       </div>
-      <div className="flex items-center gap-2">
-        {stages.map((s, i) => (
-          <div key={s} className={`h-1.5 rounded-full transition-all duration-500 ${i < idx ? "w-8 bg-violet-500 shadow-[0_0_8px_rgba(139,92,246,0.6)]" : i === idx ? "w-12 bg-violet-400 animate-pulse" : "w-6 bg-white/10"}`} />
-        ))}
+
+      {/* Terminal Live Activity Logs Feed */}
+      <div className="bg-[#08090f] border border-white/10 rounded-2xl overflow-hidden shadow-2xl">
+        <div className="flex items-center justify-between px-4 py-2.5 bg-[#0d0f18] border-b border-white/[0.08] text-xs">
+          <div className="flex items-center gap-2">
+            <div className="flex gap-1.5">
+              <span className="w-3 h-3 rounded-full bg-rose-500/80" />
+              <span className="w-3 h-3 rounded-full bg-amber-500/80" />
+              <span className="w-3 h-3 rounded-full bg-emerald-500/80" />
+            </div>
+            <span className="text-white/60 font-mono font-bold ml-2">Live Agent Execution Feed</span>
+          </div>
+          <span className="text-emerald-400 font-mono text-[10px] flex items-center gap-1">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" /> SSE Connected
+          </span>
+        </div>
+
+        <div ref={logContainerRef} className="p-4 font-mono text-xs max-h-56 overflow-y-auto space-y-2 scrollbar-thin">
+          {progressLogs.length > 0 ? (
+            progressLogs.map((log, i) => (
+              <div key={i} className="flex items-start gap-2.5 text-white/80 animate-in fade-in slide-in-from-left-2 duration-200">
+                <span className="text-white/30 text-[10px] shrink-0 mt-0.5">
+                  {log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : "Live"}
+                </span>
+                <span className="px-2 py-0.5 rounded text-[9px] font-bold uppercase bg-violet-500/20 text-violet-300 border border-violet-500/30 shrink-0">
+                  {log.status}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-white/90">{log.step}: <span className="text-white/60 font-normal">{log.message}</span></p>
+                  {log.detail && <p className="text-violet-300/60 text-[11px] mt-0.5 italic">↳ {log.detail}</p>}
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="flex items-center gap-2 text-white/40 py-2">
+              <Loader2 className="w-4 h-4 animate-spin text-violet-400" />
+              <span>Connecting to SSE progress stream...</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Rotating Pro Tip Banner */}
+      <div className="p-4 bg-gradient-to-r from-violet-900/20 via-indigo-900/20 to-pink-900/20 border border-violet-500/20 rounded-2xl flex items-center gap-3 text-xs text-violet-200 shadow-lg">
+        <Lightbulb className="w-5 h-5 text-amber-400 shrink-0 animate-bounce" />
+        <p className="flex-1 font-medium transition-all duration-300">{PRO_TIPS[tipIndex]}</p>
       </div>
     </div>
   );
 }
+
 
 // ─── Save / Discard Banner ────────────────────────────────────────────────────
 
@@ -2353,6 +2530,8 @@ export default function KitDetailPage() {
   const isDirty = selectIsDirty(store);
 
   const [status, setStatus] = useState<KitStatus | null>(null);
+  const [latestProgress, setLatestProgress] = useState<KitProgressPayload | null>(null);
+  const [progressLogs, setProgressLogs] = useState<KitProgressPayload[]>([]);
   const [kit, setKit] = useState<AppendixAKit | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -2367,6 +2546,14 @@ export default function KitDetailPage() {
     questions: GeneratedQuestion[];
     title: string;
   }>({ isOpen: false, questions: [], title: "" });
+
+  const handleProgress = useCallback((payload: KitProgressPayload) => {
+    setLatestProgress(payload);
+    setProgressLogs((prev) => {
+      if (prev.some((p) => p.timestamp === payload.timestamp && p.step === payload.step)) return prev;
+      return [...prev, payload];
+    });
+  }, []);
 
   const loadKit = useCallback(async () => {
     if (!token) return;
@@ -2386,7 +2573,13 @@ export default function KitDetailPage() {
 
       if (data.status !== "READY" && data.status !== "FAILED") {
         const unsub = subscribeToKit(kitId, token, {
-          onStatus: (s) => setStatus(s),
+          onStatus: (s, payload) => {
+            setStatus(s);
+            if (payload) handleProgress(payload);
+          },
+          onProgress: (payload) => {
+            if (payload) handleProgress(payload);
+          },
           onResult: (result) => {
             const enriched: AppendixAKit = {
               ...result,
@@ -2408,7 +2601,8 @@ export default function KitDetailPage() {
       setLoadError(e.message || "Failed to load kit");
       setInitialLoading(false);
     }
-  }, [kitId, token]);
+  }, [kitId, token, handleProgress]);
+
 
   useEffect(() => {
     if (isAuthenticated && token) loadKit();
@@ -2451,8 +2645,13 @@ export default function KitDetailPage() {
     setMockExamState({ isOpen: true, questions, title });
   };
 
+  useEffect(() => {
+    if (!isAuthenticated) {
+      router.replace("/auth/signin?redirect=/dashboard/kits");
+    }
+  }, [isAuthenticated, router]);
+
   if (!isAuthenticated) {
-    router.replace("/auth/signin?redirect=/dashboard/kits");
     return null;
   }
 
@@ -2503,7 +2702,7 @@ export default function KitDetailPage() {
 
       {/* Main Container */}
       {status && status !== "READY" && status !== "FAILED" ? (
-        <div className="p-6"><GeneratingView status={status} /></div>
+        <div className="p-6"><GeneratingView status={status} latestProgress={latestProgress} progressLogs={progressLogs} /></div>
       ) : status === "FAILED" ? (
         <div className="p-6 flex flex-col items-center justify-center py-20 space-y-4 text-center">
           <AlertCircle className="w-10 h-10 text-rose-400" />

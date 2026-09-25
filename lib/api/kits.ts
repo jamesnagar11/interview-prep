@@ -238,11 +238,22 @@ export async function getKit(
   return res.json();
 }
 
+export interface KitProgressPayload {
+  status: KitStatus;
+  step: string;
+  message: string;
+  progress: number;
+  estimatedSecondsRemaining: number;
+  detail?: string;
+  timestamp?: string;
+}
+
 export function subscribeToKit(
   kitId: string,
   token: string,
   handlers: {
-    onStatus?: (status: KitStatus) => void;
+    onStatus?: (status: KitStatus, payload?: KitProgressPayload) => void;
+    onProgress?: (payload: KitProgressPayload) => void;
     onResult: (result: AppendixAKit) => void;
     onError: (message: string) => void;
   }
@@ -251,7 +262,23 @@ export function subscribeToKit(
   const es = new EventSource(url);
 
   es.addEventListener("status", (e: MessageEvent) => {
-    try { handlers.onStatus?.(JSON.parse(e.data).status as KitStatus); } catch {}
+    try {
+      const payload: KitProgressPayload = JSON.parse(e.data);
+      handlers.onStatus?.(payload.status as KitStatus, payload);
+      handlers.onProgress?.(payload);
+    } catch {
+      handlers.onStatus?.(e.data as any);
+    }
+  });
+
+  es.addEventListener("progress", (e: MessageEvent) => {
+    try {
+      const payload: KitProgressPayload = JSON.parse(e.data);
+      handlers.onProgress?.(payload);
+      if (payload.status) {
+        handlers.onStatus?.(payload.status as KitStatus, payload);
+      }
+    } catch {}
   });
 
   es.addEventListener("result", (e: MessageEvent) => {
@@ -270,6 +297,7 @@ export function subscribeToKit(
 
   return () => es.close();
 }
+
 
 // ─── Builder — Brief ──────────────────────────────────────────────────────────
 
