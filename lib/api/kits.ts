@@ -453,6 +453,10 @@ export async function commitBuilderChanges(
     body: JSON.stringify(diff),
   });
   const json = await res.json();
+  if (json.kit) {
+    if (json.briefState) json.kit.briefState = json.briefState;
+    if (json.scheduleStale !== undefined) json.kit.scheduleStale = json.scheduleStale;
+  }
   return json.kit;
 }
 
