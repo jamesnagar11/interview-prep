@@ -149,31 +149,37 @@ bun run evaluate ./src/eval_cases.jsonl
 
 ```mermaid
 flowchart TB
-    subgraph ClientApp["🖥️ Next.js 14 App Router UI"]
-        Dashboard["Kit Creation & List (/dashboard)"]
-        BuilderUI["Kit Detail & Builder Studio (/dashboard/kits/[kitId])"]
-        PracticeUI["Interactive 3D Flashcards Studio"]
-        MockUI["Mock Exam Simulation & AI Report Card"]
-        
-        ZustandStore["Zustand State Store (useBuilderStore / useAuthStore)"]
-        SSEListener["EventSource SSE Listener"]
-
-        Dashboard --> BuilderUI
-        BuilderUI <--> ZustandStore
-        BuilderUI --> PracticeUI
-        BuilderUI --> MockUI
-        SSEListener --> BuilderUI
+    subgraph Frontend["🖥️ Client Application Layer (Next.js 14 + Zustand)"]
+        UI["Kit Dashboard & Builder Studio"]
+        Store["Zustand Diff Buffer (useBuilderStore)"]
+        SSE_Client["SSE Progress Listener"]
     end
 
-    subgraph BackendAPI["⚡ Backend REST Server (Express 5 + Bun)"]
-        APIRoutes["/api/auth | /api/kits | /api/builder | /api/practice"]
-        SSEStream["/api/kits/:id/stream"]
-        Database[("MongoDB (Prisma ORM)")]
+    subgraph Backend["⚡ Backend Engine Layer (Express 5 + Bun + LangGraph)"]
+        API["REST Router (/api/kits, /api/builder, /api/practice)"]
+        Streamer["SSE Progress Broadcaster"]
+        Pipeline["LangGraph Execution Pipeline"]
+        Rebuilder["DB Kit Reconstructor (rebuildKitFromDb)"]
+        EvalCLI["Batch Entry Point CLI (bun run evaluate)"]
     end
 
-    ZustandStore -- "POST /api/kits/:id/builder/commit (Batch Commit)" --> APIRoutes
-    SSEListener -- "Real-Time Step Logs" --> SSEStream
-    APIRoutes <--> Database
+    subgraph Services["🗄️ Database & External Services"]
+        MongoDB[("MongoDB (Prisma ORM)")]
+        LLM["OpenRouter API Gateway"]
+        WebCrawler["Web Fetcher + robots.txt Evaluator"]
+    end
+
+    UI --> API
+    UI --> SSE_Client
+    API --> Pipeline
+    Pipeline --> WebCrawler
+    Pipeline --> LLM
+    Pipeline --> MongoDB
+    Pipeline --> Streamer
+    Streamer --> SSE_Client
+    API --> Rebuilder
+    Rebuilder --> MongoDB
+    EvalCLI --> Pipeline
 ```
 
 ---
