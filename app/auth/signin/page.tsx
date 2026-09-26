@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuthStore } from "@/lib/store/auth";
@@ -11,32 +11,46 @@ function SigninForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const redirectTo = searchParams.get("redirect") ?? "/dashboard";
-  const { setToken } = useAuthStore();
+  const { isAuthenticated, hasHydrated, setToken } = useAuthStore();
 
   const [form, setForm] = useState({ email: "", password: "" });
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  // If already authenticated, redirect immediately
+  useEffect(() => {
+    if (hasHydrated && isAuthenticated) {
+      router.replace(redirectTo);
+    }
+  }, [hasHydrated, isAuthenticated, redirectTo, router]);
+
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setForm((f) => ({ ...f, [e.target.name]: e.target.value }));
     setError("");
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!form.email.trim() || !form.password) {
+    const formEl = e.currentTarget;
+    const emailInput = (formEl.elements.namedItem("email") as HTMLInputElement)?.value || "";
+    const passwordInput = (formEl.elements.namedItem("password") as HTMLInputElement)?.value || "";
+
+    const email = (form.email || emailInput).trim();
+    const password = form.password || passwordInput;
+
+    if (!email || !password) {
       setError("Email and password are required.");
       return;
     }
     setLoading(true);
     try {
-      const res = await signinApi(form);
+      const res = await signinApi({ email, password });
       if (res.success && res.token) {
         setToken(res.token);
         router.push(redirectTo);
       } else {
-        setError(res.msg || "Sign in failed. Please try again.");
+        setError(res.msg || "Sign in failed. Please check your credentials.");
       }
     } catch {
       setError("Network error. Please check your connection.");

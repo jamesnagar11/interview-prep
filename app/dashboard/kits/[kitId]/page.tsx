@@ -495,6 +495,17 @@ function BuilderQuestionCard({
   const isTemp = q.id.startsWith("temp-");
   const theme = CATEGORY_THEMES[q.category] ?? { bg: "bg-white/5", text: "text-white/60", border: "border-white/10", glow: "" };
 
+  useEffect(() => {
+    setDraft({ prompt: q.prompt, answer_outline: q.answer_outline, category: q.category, difficulty: q.difficulty });
+  }, [q.prompt, q.answer_outline, q.category, q.difficulty]);
+
+  const toggleEdit = () => {
+    if (!editMode) {
+      setDraft({ prompt: q.prompt, answer_outline: q.answer_outline, category: q.category, difficulty: q.difficulty });
+    }
+    setEditMode((v) => !v);
+  };
+
   const confirmEdit = () => {
     onUpdate(draft);
     setEditMode(false);
@@ -563,7 +574,7 @@ function BuilderQuestionCard({
             className={`p-2 rounded-xl transition-all ${q.state === "PINNED" ? "text-amber-400 bg-amber-500/15 border border-amber-500/30 shadow-md" : "text-white/30 hover:text-amber-400 hover:bg-amber-500/10"}`}>
             {q.state === "PINNED" ? <Pin className="w-4 h-4" /> : <PinOff className="w-4 h-4" />}
           </button>
-          <button onClick={() => setEditMode((v) => !v)} aria-label="Edit question"
+          <button onClick={toggleEdit} aria-label="Edit question"
             className="p-2 text-white/30 hover:text-white hover:bg-white/[0.06] rounded-xl transition-all">
             <Pencil className="w-4 h-4" />
           </button>
@@ -2528,7 +2539,7 @@ function MockExamHistoryTab({
 
 export default function KitDetailPage() {
   const { kitId } = useParams<{ kitId: string }>();
-  const { token, isAuthenticated } = useAuthStore();
+  const { token, isAuthenticated, hasHydrated } = useAuthStore();
   const router = useRouter();
 
   const store = useBuilderStore();
@@ -2610,9 +2621,14 @@ export default function KitDetailPage() {
 
 
   useEffect(() => {
-    if (isAuthenticated && token) loadKit();
+    if (!hasHydrated) return;
+    if (!isAuthenticated) {
+      router.replace(`/auth/signin?redirect=${encodeURIComponent(`/dashboard/kits/${kitId}`)}`);
+    } else if (token) {
+      loadKit();
+    }
     return () => { unsubRef.current?.(); };
-  }, [kitId, isAuthenticated, token]);
+  }, [kitId, isAuthenticated, hasHydrated, token, loadKit, router]);
 
   useEffect(() => {
     if (!isDirty) return;
@@ -2650,14 +2666,12 @@ export default function KitDetailPage() {
     setMockExamState({ isOpen: true, questions, title });
   };
 
-  useEffect(() => {
-    if (!isAuthenticated) {
-      router.replace("/auth/signin?redirect=/dashboard/kits");
-    }
-  }, [isAuthenticated, router]);
-
-  if (!isAuthenticated) {
-    return null;
+  if (!hasHydrated || (!isAuthenticated && hasHydrated)) {
+    return (
+      <div className="flex items-center justify-center h-full min-h-[60vh]">
+        <Loader2 className="w-8 h-8 text-violet-400 animate-spin" />
+      </div>
+    );
   }
 
   if (initialLoading) {

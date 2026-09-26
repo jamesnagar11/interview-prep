@@ -21,6 +21,7 @@ interface AuthState {
   token: string | null;
   user: AuthUser | null;
   isAuthenticated: boolean;
+  hasHydrated: boolean;
   setToken: (token: string) => void;
   logout: () => void;
 }
@@ -39,32 +40,36 @@ export const useAuthStore = create<AuthState>()(
       token: null,
       user: null,
       isAuthenticated: false,
+      hasHydrated: false,
 
       setToken: (token: string) => {
         try {
           const user = decodeUser(token);
-          set({ token, user, isAuthenticated: true });
+          set({ token, user, isAuthenticated: true, hasHydrated: true });
         } catch {
-          set({ token: null, user: null, isAuthenticated: false });
+          set({ token: null, user: null, isAuthenticated: false, hasHydrated: true });
         }
       },
 
-      logout: () => set({ token: null, user: null, isAuthenticated: false }),
+      logout: () => set({ token: null, user: null, isAuthenticated: false, hasHydrated: true }),
     }),
     {
       name: "prepkit-auth",
       // Persist only the token; derive user on rehydration
       partialize: (state) => ({ token: state.token }),
       onRehydrateStorage: () => (state) => {
-        if (state?.token) {
-          try {
-            state.user = decodeUser(state.token);
-            state.isAuthenticated = true;
-          } catch {
-            state.token = null;
-            state.user = null;
-            state.isAuthenticated = false;
+        if (state) {
+          if (state.token) {
+            try {
+              state.user = decodeUser(state.token);
+              state.isAuthenticated = true;
+            } catch {
+              state.token = null;
+              state.user = null;
+              state.isAuthenticated = false;
+            }
           }
+          state.hasHydrated = true;
         }
       },
     }
