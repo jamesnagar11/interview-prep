@@ -258,16 +258,21 @@ export function selectDisplayedKit(state: BuilderState): AppendixAKit | null {
   // Merge questions
   let questions = baseKit.questions
     .filter((q) => !diff.questions.deletes.includes(q.id))
-    .map((q) => ({
-      ...q,
-      ...(diff.questions.updates[q.id] ?? {}),
-      state:
-        diff.questions.pins[q.id] !== undefined
-          ? diff.questions.pins[q.id]
-            ? ("PINNED" as const)
-            : ("GENERATED" as const)
-          : q.state,
-    }));
+    .map((q) => {
+      const hasUpdate = !!diff.questions.updates[q.id];
+      const pinState = diff.questions.pins[q.id];
+      let state = q.state;
+      if (pinState !== undefined) {
+        state = pinState ? ("PINNED" as const) : (hasUpdate || q.state === "EDITED" ? ("EDITED" as const) : ("GENERATED" as const));
+      } else if (hasUpdate && q.state !== "PINNED") {
+        state = "EDITED" as const;
+      }
+      return {
+        ...q,
+        ...(diff.questions.updates[q.id] ?? {}),
+        state,
+      };
+    });
 
   // Apply reorders per category
   const allCategories: QuestionCategory[] = ["technical", "behavioural", "system-design", "company-fit"];
@@ -296,23 +301,28 @@ export function selectDisplayedKit(state: BuilderState): AppendixAKit | null {
     prompt: c.prompt,
     answer_outline: c.answer_outline,
     difficulty: c.difficulty,
-    state: "GENERATED" as const,
+    state: "EDITED" as const,
     orderIndex: 9999,
   }));
 
   // Merge flashcards
   let flashcards = baseKit.flashcards
     .filter((f) => !diff.flashcards.deletes.includes(f.id))
-    .map((f) => ({
-      ...f,
-      ...(diff.flashcards.updates[f.id] ?? {}),
-      state:
-        diff.flashcards.pins[f.id] !== undefined
-          ? diff.flashcards.pins[f.id]
-            ? ("PINNED" as const)
-            : ("GENERATED" as const)
-          : f.state,
-    }));
+    .map((f) => {
+      const hasUpdate = !!diff.flashcards.updates[f.id];
+      const pinState = diff.flashcards.pins[f.id];
+      let state = f.state;
+      if (pinState !== undefined) {
+        state = pinState ? ("PINNED" as const) : (hasUpdate || f.state === "EDITED" ? ("EDITED" as const) : ("GENERATED" as const));
+      } else if (hasUpdate && f.state !== "PINNED") {
+        state = "EDITED" as const;
+      }
+      return {
+        ...f,
+        ...(diff.flashcards.updates[f.id] ?? {}),
+        state,
+      };
+    });
 
   const fcOrder = diff.flashcards.reorders;
   if (fcOrder.length > 0) {

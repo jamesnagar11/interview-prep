@@ -1457,6 +1457,7 @@ function OverviewTab({
   onLaunchMock: (qs: GeneratedQuestion[], title: string) => void;
 }) {
   const store = useBuilderStore();
+  const isDirty = selectIsDirty(store);
   const [activeCategory, setActiveCategory] = useState<QuestionCategory>("technical");
   const [showAddQ, setShowAddQ] = useState(false);
   const [showAddF, setShowAddF] = useState(false);
@@ -1495,11 +1496,15 @@ function OverviewTab({
   const handleRegenCategory = async () => {
     setRegenCategory(activeCategory);
     try {
+      if (isDirty && token && kitId) {
+        await commitBuilderChanges(kitId, store.diff, token);
+      }
       const updatedKit = await regenerateQuestionCategory(kitId, activeCategory, token);
       store.setBaseKit(updatedKit);
-      toast(updatedKit.questions.filter((q) => q.category === activeCategory).length === 0
-        ? "Nothing to regenerate — every question is edited or pinned."
-        : `${CATEGORY_LABELS[activeCategory]} questions regenerated.`
+      toast(
+        updatedKit.questions.filter((q) => q.category === activeCategory && q.state === "GENERATED").length === 0
+          ? "Nothing to regenerate — all questions in this category are edited or pinned."
+          : `${CATEGORY_LABELS[activeCategory]} questions regenerated (edited/pinned questions preserved).`
       );
     } catch (e: any) {
       toast(`Regeneration failed: ${e.message}`);
